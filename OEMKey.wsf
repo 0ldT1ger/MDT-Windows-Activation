@@ -1,0 +1,169 @@
+<job id="OEMKey">
+    <script language="VBScript" src="ZTIUtility.vbs"/>
+    <script language="VBScript">
+
+'Define Target Computer
+	strComputer = "."
+
+'Set object values
+	Set oArguments = WScript.Arguments.Named
+	Set oFSO = CreateObject("Scripting.FileSystemObject") 
+	Set oShell = CreateObject("WScript.Shell")
+	Set oWMI = GetObject("winmgmts:{impersonationLevel=impersonate}!\\" & strComputer & "\root\CIMV2")
+	
+'Define ASCII Characters
+	chrSpace = Chr(32)
+	chrSingleQuote = Chr(39)
+	chrDoubleQuote = Chr(34)
+
+'Define Path Variables
+	WorkingDir = oFSO.GetFolder(oFSO.GetAbsolutePathName("."))
+	strResourceDir = WorkingDir & "\Custom-ZTIGatherProductKey\"
+	strSLMGR = "C:\windows\system32\slmgr.vbs"
+	strBlankProductKey = "Embedded product key not detected"
+
+
+'Option Explicit
+Function ConvertToKey(Key)
+    Const KeyOffset = 52
+    isWin8 = (Key(66) \ 6) And 1
+    Key(66) = (Key(66) And &HF7) Or ((isWin8 And 2) * 4)
+    i = 24
+    Chars = "BCDFGHJKMPQRTVWXY2346789"
+    Do
+        Cur = 0
+        X = 14
+        Do
+            Cur = Cur * 256
+            Cur = Key(X + KeyOffset) + Cur
+            Key(X + KeyOffset) = (Cur \ 24)
+            Cur = Cur Mod 24
+            X = X -1
+        Loop While X >= 0
+        i = i -1
+        KeyOutput = Mid(Chars, Cur + 1, 1) & KeyOutput
+        Last = Cur
+    Loop While i >= 0
+    If (isWin8 = 1) Then
+        keypart1 = Mid(KeyOutput, 2, Last)
+        insert = "N"
+        KeyOutput = Replace(KeyOutput, keypart1, keypart1 & insert, 2, 1, 0)
+        If Last = 0 Then KeyOutput = insert & KeyOutput
+    End If
+    a = Mid(KeyOutput, 1, 5)
+    b = Mid(KeyOutput, 6, 5)
+    c = Mid(KeyOutput, 11, 5)
+    d = Mid(KeyOutput, 16, 5)
+    e = Mid(KeyOutput, 21, 5)
+    ConvertToKey = a & "-" & b & "-" & c & "-" & d & "-" & e
+End Function
+
+Private Sub RemoveWindows
+	Dim objShell: Set objShell = CreateObject("Shell.Application")
+	Dim objFSO: Set objFSO = CreateObject("Scripting.FileSystemObject")
+	scriptName = strSLMGR
+	If objFSO.FileExists(scriptName) Then
+		Dim objFile: Set objFile = objFSO.GetFile(scriptName)
+		objShell.ShellExecute "wscript.exe", Chr(34) & objFile.Path & Chr(34) & " -cpky"
+		objShell.ShellExecute "wscript.exe", Chr(34) & objFile.Path & Chr(34) & " -upk"
+	Else
+		Wscript.Echo "Script Does Not Exist!" & vbCrLf & scriptName
+	End If 
+End Sub
+
+Private Sub ActivateWindows(Key)
+	Dim objShell: Set objShell = CreateObject("Shell.Application")
+	Dim objFSO: Set objFSO = CreateObject("Scripting.FileSystemObject")
+	scriptName = strSLMGR
+	If objFSO.FileExists(scriptName) Then
+		Dim objFile: Set objFile = objFSO.GetFile(scriptName)
+		objShell.ShellExecute "wscript.exe", Chr(34) & objFile.Path & Chr(34) & " -ipk " & key, "", "runas", 1
+		objShell.ShellExecute "wscript.exe", Chr(34) & objFile.Path & Chr(34) & " -ato"
+	Else
+		Wscript.Echo "Script Does Not Exist!" & vbCrLf & scriptName
+	End If 
+End Sub
+
+'Query # 1 - Determine the Operating System Architecture
+	Set oOperatingSystem = oWMI.ExecQuery("Select * from Win32_OperatingSystem")
+		For Each oItem in oOperatingSystem
+			strOSArchitecture = UCase("X" & strOSArchitecture)
+			strOSName = Left(oItem.Name, InStr(oItem.Name, "|") -1)
+			strOSName = Replace(strOSName, "Microsoft ", "")
+			If IsNull(strOSName) Or (strOSName = "") Then 
+				strOSName = "WindowsPE" 
+			End If
+			strOSVersion = Split(oItem.Version, ".")(0) & "." & Split(oItem.Version, ".")(1)
+		Next
+
+	Set oArchitectures = oWMI.ExecQuery("Select * from Win32_OperatingSystem")
+		For Each oArchitecture In oArchitectures
+			OSArchitecture = oArchitecture.OSArchitecture
+	Next
+
+	' Modify the string value of the "OSArchitecture" variable
+		If (OSArchitecture = "32-bit") Then
+			strOSArchitecture = "X86"
+		ElseIf (OSArchitecture = "64-bit") Then
+			strOSArchitecture = "X64"
+		End If
+
+
+
+On Error Resume Next
+Dim OEM , objWMIService , colItems , objItem , verItems, ver , name
+	Set objWMIService = GetObject("winmgmts:\\.\root\CIMV2") 
+	Set verItems = objWMIService.ExecQuery( _
+    		"SELECT * FROM Win32_OperatingSystem",,48) 
+	For Each objItem in verItems 
+		ver = objItem.Version
+		name = Replace (objItem.Caption,"Microsoft ","")
+Next
+
+'Determine what the Product Key is. 
+Set colItems = objWMIService.ExecQuery( _
+	"SELECT * FROM SoftwareLicensingService",,48) 
+For Each objItem in colItems 
+	OEM = objItem.OA3xOriginalProductKey
+Next
+
+If OEM = "" Then
+	strRPKFB = strResourceDir & strOSArchitecture & "\" & "rpkfb_" & strOSArchitecture & ".exe"
+	Set strGatherProductKey = oShell.Exec(chrDoubleQuote & strRPKFB & chrDoubleQuote)
+	OEM = strGatherProductKey.StdOut.ReadAll
+End IF
+
+If OEM = "" Then 
+	If CLng(Replace(ver,".","")) < 630000 Then
+		OEM = name & " not supported"
+	Else	
+		OEM = strBlankProductKey
+	End If
+End If
+
+Set WshShell = CreateObject("WScript.Shell")
+Key = OEM
+DigitalID = WshShell.RegRead(key & "DigitalProductId")
+
+'Write gathered information to the screen
+	WScript.Echo("Operating System Architecture = " & strOSArchitecture)
+	WScript.Echo("Operating System Caption = " & strOSName)
+	WScript.Echo("Operating System Kernel Version = " & strOSVersion)
+	WScript.Echo("Product Key = " & Key)
+	WScript.Echo("Current Script Path = " & WScript.ScriptFullName)
+	WScript.Echo("Resource Directory = " & strResourceDir)
+
+' Determine if the script is running in Windows or Windows PE and put the Product key in the system.
+If strOSName = ("WindowsPE") then
+	oLogging.CreateEntry "Product Key retrieved is " & Key, LogTypeInfo
+	oEnvironment.Item("ProductKey") = "Key"
+Else
+	oLogging.CreateEntry "Product Key retrieved is " & Key, LogTypeInfo
+	oEnvironment.Item("ProductKey") = "Key"
+	Call RemoveWindows
+	WScript.Sleep 2*1000
+	Call ActivateWindows(OEM)
+End If
+
+    </script>
+</job>
